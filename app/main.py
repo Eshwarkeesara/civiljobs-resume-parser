@@ -1,6 +1,7 @@
 from fastapi import FastAPI
-from app.api.resume import router
 
 app = FastAPI(title="Civil Jobs Resume Parser")
 
-app.include_router(router)
+@app.get("/__version")
+def version():
+    return {"version": "UPLOAD_TEST_V1"}
