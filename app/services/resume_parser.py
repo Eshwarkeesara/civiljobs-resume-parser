@@ -1,12 +1,10 @@
 import pdfplumber
 from docx import Document
 import re
-from typing import Dict, List
 
-
-def extract_text_from_pdf(file_path: str) -> str:
+def extract_text_from_pdf(path: str) -> str:
     text = ""
-    with pdfplumber.open(file_path) as pdf:
+    with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
             if page_text:
@@ -14,8 +12,8 @@ def extract_text_from_pdf(file_path: str) -> str:
     return text
 
 
-def extract_text_from_docx(file_path: str) -> str:
-    doc = Document(file_path)
+def extract_text_from_docx(path: str) -> str:
+    doc = Document(path)
     return "\n".join(p.text for p in doc.paragraphs)
 
 
@@ -29,7 +27,7 @@ def extract_phone(text: str):
     return match.group() if match else None
 
 
-def extract_education(text: str) -> List[str]:
+def extract_education(text: str):
     education = []
     keywords = ["diploma", "b.tech", "btech", "m.tech", "mtech"]
     for line in text.lower().split("\n"):
@@ -38,17 +36,17 @@ def extract_education(text: str) -> List[str]:
     return education
 
 
-def parse_resume(file_path: str) -> Dict:
+def parse_resume(file_path: str):
     if file_path.endswith(".pdf"):
         text = extract_text_from_pdf(file_path)
     elif file_path.endswith(".docx"):
         text = extract_text_from_docx(file_path)
     else:
-        return {"error": "Unsupported file format"}
+        return {"error": "Unsupported format"}
 
     return {
         "email": extract_email(text),
         "phone": extract_phone(text),
         "education_raw": extract_education(text),
-        "text_preview": text[:500]  # for debugging
+        "text_preview": text[:500]
     }
