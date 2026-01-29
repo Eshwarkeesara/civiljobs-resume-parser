@@ -1,9 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 
-# ✅ app must be defined FIRST
 app = FastAPI(title="Civil Jobs Resume Parser")
 
-# ✅ then routes can reference `app`
 @app.get("/")
 def health():
     return {"status": "ok"}
+
+@app.post("/upload-test")
+async def upload_test(file: UploadFile = File(...)):
+    return {
+        "filename": file.filename,
+        "content_type": file.content_type
+    }
