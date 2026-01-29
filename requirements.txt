@@ -1,6 +1,3 @@
 fastapi
 uvicorn
-tika
-pdfplumber
-python-docx
-spacy
+python-multipart
