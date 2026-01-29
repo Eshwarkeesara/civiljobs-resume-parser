@@ -1,24 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
-import tempfile
-import shutil
-from app.services.resume_parser import parse_resume
+from fastapi import APIRouter, UploadFile, File
 
 router = APIRouter()
 
-@router.post("/resume/parse")
-async def parse_resume_api(file: UploadFile = File(...)):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded")
-
-    suffix = "." + file.filename.split(".")[-1]
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
-    parsed = parse_resume(tmp_path)
-
+@router.post("/upload-test")
+async def upload_test(file: UploadFile = File(...)):
     return {
         "filename": file.filename,
-        "parsed_data": parsed
+        "content_type": file.content_type
     }
