@@ -1,7 +1,7 @@
 import pdfplumber
 from docx import Document
 import re
-
+from typing import Optional
 
 def extract_text_from_pdf(path: str) -> str:
     text = ""
@@ -17,6 +17,54 @@ def extract_text_from_docx(path: str) -> str:
     doc = Document(path)
     return "\n".join(p.text for p in doc.paragraphs)
 
+def clean_name(name: str) -> str:
+    name = re.sub(r'[^A-Za-z\s]', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name.title()
+
+
+def extract_full_name(
+    text: str,
+    email: Optional[str],
+    linkedin_url: Optional[str],
+    filename: str,
+    nlp
+) -> str:
+    # 1️⃣ Try top lines (most reliable)
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for line in lines[:5]:
+        if (
+            2 <= len(line.split()) <= 5
+            and not any(word in line.lower() for word in [
+                "resume", "curriculum", "profile", "engineer",
+                "consultant", "summary"
+            ])
+        ):
+            return clean_name(line)
+
+    # 2️⃣ spaCy PERSON entity
+    doc = nlp(text)
+    for ent in doc.ents:
+        if ent.label_ == "PERSON":
+            return clean_name(ent.text)
+
+    # 3️⃣ Email fallback
+    if email:
+        prefix = email.split("@")[0].replace(".", " ").replace("_", " ")
+        if len(prefix.split()) >= 2:
+            return clean_name(prefix)
+
+    # 4️⃣ LinkedIn fallback
+    if linkedin_url:
+        slug = linkedin_url.rstrip("/").split("/")[-1].replace("-", " ")
+        if len(slug.split()) >= 2:
+            return clean_name(slug)
+
+    # 5️⃣ Filename fallback (GUARANTEED)
+    name = re.sub(r'\.(pdf|docx)$', '', filename, flags=re.I)
+    name = re.sub(r'\d+', '', name)
+    name = name.replace("_", " ").replace("-", " ")
+    return clean_name(name) or "Unknown Candidate"
 
 def extract_email(text: str):
     match = re.search(

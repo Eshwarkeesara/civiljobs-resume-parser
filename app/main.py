@@ -1,8 +1,13 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 import tempfile, shutil
 
+from app.api.resume import router as resume_router
+
+app.include_router(resume_router)
+
 # Core services
 from app.services.resume_parser import parse_resume
+from app.services.resume_parser import extract_full_name
 
 # Domain logic
 from app.domain.education import normalize_education
