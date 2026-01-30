@@ -2,6 +2,7 @@ import pdfplumber
 from docx import Document
 import re
 
+
 def extract_text_from_pdf(path: str) -> str:
     text = ""
     with pdfplumber.open(path) as pdf:
@@ -18,25 +19,31 @@ def extract_text_from_docx(path: str) -> str:
 
 
 def extract_email(text: str):
-    match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+    match = re.search(
+        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        text
+    )
     return match.group() if match else None
 
 
 def extract_phone(text: str):
-    match = re.search(r"\+?\d[\d\s\-]{8,15}\d", text)
-    return match.group() if match else None
+    matches = re.findall(r"(?:\+91[-\s]?)?[6-9]\d{9}", text)
+    return matches[0] if matches else None
 
 
 def extract_education(text: str):
     education = []
     keywords = ["diploma", "b.tech", "btech", "m.tech", "mtech"]
+
     for line in text.lower().split("\n"):
         if any(k in line for k in keywords):
             education.append(line.strip())
+
     return education
 
 
 def parse_resume(file_path: str):
+
     if file_path.endswith(".pdf"):
         text = extract_text_from_pdf(file_path)
     elif file_path.endswith(".docx"):
