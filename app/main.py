@@ -1,6 +1,9 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 import tempfile, shutil
 from app.services.resume_parser import parse_resume
+from app.domain.education import normalize_education
+from app.domain.education_score import education_score
+
 
 app = FastAPI(title="Civil Jobs Resume Parser")
 
