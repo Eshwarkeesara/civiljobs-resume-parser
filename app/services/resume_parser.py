@@ -5,15 +5,16 @@ import tempfile
 import os
 from fastapi import UploadFile
 
+from app.domain.education import detect_education_levels
+from app.domain.education_score import score_education
+from app.domain.skills import extract_skills
+
 
 # -----------------------------
-# TEXT EXTRACTION + VALIDATION
+# TEXT EXTRACTION
 # -----------------------------
 def extract_text(file: UploadFile) -> str:
     suffix = os.path.splitext(file.filename)[1].lower()
-
-    if suffix not in [".pdf", ".docx"]:
-        raise ValueError("Unsupported file format. Only .pdf and .docx allowed.")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file.file.read())
@@ -25,9 +26,8 @@ def extract_text(file: UploadFile) -> str:
         if suffix == ".pdf":
             with pdfplumber.open(tmp_path) as pdf:
                 for page in pdf.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text + "\n"
+                    if page.extract_text():
+                        text += page.extract_text() + "\n"
 
         elif suffix == ".docx":
             doc = docx.Document(tmp_path)
@@ -40,7 +40,31 @@ def extract_text(file: UploadFile) -> str:
 
 
 # -----------------------------
-# EMAIL
+# NAME (GUARANTEED)
+# -----------------------------
+def extract_full_name(text: str, email: str | None, filename: str) -> str:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    for line in lines[:10]:
+        if (
+            2 <= len(line.split()) <= 6
+            and line.replace(" ", "").isalpha()
+            and not line.isupper()
+            and not any(x in line.lower() for x in ["resume", "profile", "engineer"])
+        ):
+            return line.title()
+
+    if email:
+        prefix = email.split("@")[0].replace(".", " ").replace("_", " ")
+        if len(prefix.split()) >= 2:
+            return prefix.title()
+
+    name = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ")
+    return name.title() if name else "Unknown Candidate"
+
+
+# -----------------------------
+# CONTACT
 # -----------------------------
 def extract_email(text: str):
     match = re.search(
@@ -50,100 +74,59 @@ def extract_email(text: str):
     return match.group() if match else None
 
 
-# -----------------------------
-# LINKEDIN (FULL URL)
-# -----------------------------
-def extract_linkedin(text: str):
-    if not text:
-        return None
-
-    t = text.lower()
-
-    # normalize common PDF artefacts
-    t = re.sub(r"linkedin\s*\.\s*com", "linkedin.com", t)
-    t = re.sub(r"(linkedin\.com)\s*/\s*(in|pub)\s*/\s*", r"\1/\2/", t)
-
-    # repair broken lines
-    t = re.sub(
-        r"(linkedin\.com/(?:in|pub)/[a-z0-9\-]+)\s*\n\s*([a-z0-9\-]+)",
-        r"\1\2",
-        t
-    )
-
-    matches = re.findall(
-        r"(?:https?://)?(?:www\.)?linkedin\.com/(?:in|pub)/[a-z0-9\-]+",
-        t
-    )
-
-    if not matches:
-        return None
-
-    url = max(matches, key=len)
-
-    if url.startswith("www."):
-        url = "https://" + url
-    if url.startswith("linkedin.com"):
-        url = "https://www." + url
-    if url.startswith("https://linkedin.com"):
-        url = url.replace("https://linkedin.com", "https://www.linkedin.com")
-
-    if not url.endswith("/"):
-        url += "/"
-
-    return url
+def extract_phone(text: str):
+    match = re.search(r"(?:\+91[-\s]?)?[6-9]\d{9}", text)
+    return match.group() if match else None
 
 
 # -----------------------------
-# NAME (ATS SAFE)
+# EXPERIENCE
 # -----------------------------
-def extract_full_name(text: str, email: str | None, filename: str) -> str:
-    linkedin = extract_linkedin(text)
-
-    # 1️⃣ LinkedIn slug (strongest)
-    if linkedin:
-        slug = linkedin.split("/in/")[-1].strip("/").replace("-", " ")
-        slug = re.sub(r"\d+", "", slug).strip()
-        if len(slug.split()) >= 2:
-            return slug.title()
-
-    # 2️⃣ Header scan (safe)
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    for line in lines[:10]:
-        if (
-            2 <= len(line.split()) <= 6
-            and line.replace(" ", "").replace(".", "").isalpha()
-            and not any(x in line.lower() for x in ["resume", "profile", "engineer"])
-        ):
-            return line.title()
-
-    # 3️⃣ Email fallback
-    if email:
-        prefix = email.split("@")[0]
-        prefix = re.sub(r"\d+", "", prefix)
-        prefix = prefix.replace(".", " ").replace("_", " ").replace("-", " ")
-        if len(prefix.split()) >= 2:
-            return prefix.title()
-
-    # 4️⃣ Filename fallback
-    name = os.path.splitext(filename)[0]
-    name = re.sub(r"\d+", "", name)
-    name = name.replace("_", " ").replace("-", " ")
-    return name.title() if name else "Unknown Candidate"
+def extract_total_experience_years(text: str):
+    match = re.search(r"(\d+)\s*(yrs|years)", text.lower())
+    return int(match.group(1)) if match else None
 
 
 # -----------------------------
-# MASTER PARSER (STAGE 1)
+# MASTER PARSER
 # -----------------------------
 def parse_resume(file: UploadFile) -> dict:
     text = extract_text(file)
 
     email = extract_email(text)
-    linkedin = extract_linkedin(text)
+    phone = extract_phone(text)
+
     full_name = extract_full_name(text, email, file.filename)
+
+    education_levels = detect_education_levels(text)
+    education_score = score_education(education_levels)
+
+    experience_years = extract_total_experience_years(text)
+    skills = extract_skills(text)
+
+    confidence = 0
+    if full_name:
+        confidence += 25
+    if email or phone:
+        confidence += 20
+    if education_score > 0:
+        confidence += 30
+    if experience_years:
+        confidence += 25
+
+    confidence = min(confidence, 100)
 
     return {
         "fullName": full_name,
         "email": email or "",
-        "linkedin": linkedin or "",
-        "rawText": text
+        "phone": phone or "",
+        "education": [
+            {
+                "qualification": list(education_levels),
+                "score": education_score
+            }
+        ] if education_levels else [],
+        "skills": skills,
+        "totalExperienceYears": experience_years,
+        "confidenceScore": confidence
     }
