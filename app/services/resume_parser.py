@@ -1,235 +1,148 @@
-# services/resume_parser.py
-
-import os
 import re
-from typing import Optional, Dict, Any, List
-from urllib.parse import urlparse
-
 import pdfplumber
-from docx import Document
+import docx
+import tempfile
+import os
+from fastapi import UploadFile
 
 
-# =====================================================
-# Stage 1.1 — File Validation + Text Extraction
-# =====================================================
+# -----------------------------
+# TEXT EXTRACTION + VALIDATION
+# -----------------------------
+def extract_text(file: UploadFile) -> str:
+    suffix = os.path.splitext(file.filename)[1].lower()
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx"}
+    if suffix not in [".pdf", ".docx"]:
+        raise ValueError("Unsupported file format. Only .pdf and .docx allowed.")
 
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file.file.read())
+        tmp_path = tmp.name
 
-def extract_text_from_path(file_path: str) -> str:
-    ext = os.path.splitext(file_path)[1].lower()
+    text = ""
 
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise ValueError("Unsupported file type. Only PDF and DOCX allowed.")
+    try:
+        if suffix == ".pdf":
+            with pdfplumber.open(tmp_path) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
 
-    if ext == ".pdf":
-        return _extract_pdf_text(file_path)
+        elif suffix == ".docx":
+            doc = docx.Document(tmp_path)
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+    finally:
+        os.unlink(tmp_path)
 
-    if ext == ".docx":
-        return _extract_docx_text(file_path)
-
-    return ""
-
-
-def _extract_pdf_text(file_path: str) -> str:
-    chunks: List[str] = []
-    with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            if text.strip():
-                chunks.append(text)
-    return normalize_text("\n".join(chunks))
-
-
-def _extract_docx_text(file_path: str) -> str:
-    doc = Document(file_path)
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return normalize_text("\n".join(paragraphs))
-
-
-def normalize_text(text: str) -> str:
-    text = text.replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{2,}", "\n", text)
     return text.strip()
 
 
-# =====================================================
-# Stage 1.2 — Email Extraction
-# =====================================================
-
-EMAIL_REGEX = re.compile(
-    r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-)
-
-
-def extract_email(text: str) -> Optional[str]:
-    match = EMAIL_REGEX.search(text)
-    return match.group(0) if match else None
+# -----------------------------
+# EMAIL
+# -----------------------------
+def extract_email(text: str):
+    match = re.search(
+        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        text
+    )
+    return match.group() if match else None
 
 
-# =====================================================
-# Stage 1.3 — LinkedIn URL (ATS-Grade, Universal)
-# =====================================================
-
-def extract_linkedin_url(text: str) -> Optional[str]:
+# -----------------------------
+# LINKEDIN (FULL URL)
+# -----------------------------
+def extract_linkedin(text: str):
     if not text:
         return None
 
-    # Normalize common PDF artifacts
     t = text.lower()
+
+    # normalize common PDF artefacts
     t = re.sub(r"linkedin\s*\.\s*com", "linkedin.com", t)
     t = re.sub(r"(linkedin\.com)\s*/\s*(in|pub)\s*/\s*", r"\1/\2/", t)
 
-    # Repair line breaks inside profile slug
+    # repair broken lines
     t = re.sub(
         r"(linkedin\.com/(?:in|pub)/[a-z0-9\-]+)\s*\n\s*([a-z0-9\-]+)",
         r"\1\2",
         t
     )
 
-    # Broad candidate extraction
-    candidates = re.findall(
+    matches = re.findall(
         r"(?:https?://)?(?:www\.)?linkedin\.com/(?:in|pub)/[a-z0-9\-]+",
         t
     )
 
-    if not candidates:
+    if not matches:
         return None
 
-    # Choose the longest (most complete)
-    raw = max(candidates, key=len)
+    url = max(matches, key=len)
 
-    # Canonicalize
-    if raw.startswith("www."):
-        raw = "https://" + raw
-    if raw.startswith("linkedin.com"):
-        raw = "https://www." + raw
-    if raw.startswith("https://linkedin.com"):
-        raw = raw.replace("https://linkedin.com", "https://www.linkedin.com")
+    if url.startswith("www."):
+        url = "https://" + url
+    if url.startswith("linkedin.com"):
+        url = "https://www." + url
+    if url.startswith("https://linkedin.com"):
+        url = url.replace("https://linkedin.com", "https://www.linkedin.com")
 
-    parsed = urlparse(raw)
-    clean = f"https://{parsed.netloc}{parsed.path}"
+    if not url.endswith("/"):
+        url += "/"
 
-    if not clean.endswith("/"):
-        clean += "/"
-
-    return clean
+    return url
 
 
-# =====================================================
-# Stage 1.4 — Name Extraction (Evidence-Based)
-# =====================================================
+# -----------------------------
+# NAME (ATS SAFE)
+# -----------------------------
+def extract_full_name(text: str, email: str | None, filename: str) -> str:
+    linkedin = extract_linkedin(text)
 
-NAME_STOPWORDS = {"resume", "profile", "curriculum", "vitae", "cv", "contact"}
+    # 1️⃣ LinkedIn slug (strongest)
+    if linkedin:
+        slug = linkedin.split("/in/")[-1].strip("/").replace("-", " ")
+        slug = re.sub(r"\d+", "", slug).strip()
+        if len(slug.split()) >= 2:
+            return slug.title()
 
-
-def extract_full_name(
-    text: str,
-    email: Optional[str],
-    linkedin_url: Optional[str],
-    filename: str
-) -> Optional[str]:
-
-    # ---- 1️⃣ Strongest signal: LinkedIn slug ----
-    if linkedin_url:
-        name = _name_from_linkedin(linkedin_url)
-        if name:
-            return name
-
-    # ---- 2️⃣ Second signal: Email username ----
-    if email:
-        name = _name_from_email(email)
-        if name:
-            return name
-
-    # ---- 3️⃣ Header scan (ATS-safe fallback) ----
+    # 2️⃣ Header scan (safe)
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    header_zone = lines[:25]
+    for line in lines[:10]:
+        if (
+            2 <= len(line.split()) <= 6
+            and line.replace(" ", "").replace(".", "").isalpha()
+            and not any(x in line.lower() for x in ["resume", "profile", "engineer"])
+        ):
+            return line.title()
 
-    for line in header_zone:
-        cleaned = _clean_name_line(line)
-        if _looks_like_person_name(cleaned):
-            return cleaned
+    # 3️⃣ Email fallback
+    if email:
+        prefix = email.split("@")[0]
+        prefix = re.sub(r"\d+", "", prefix)
+        prefix = prefix.replace(".", " ").replace("_", " ").replace("-", " ")
+        if len(prefix.split()) >= 2:
+            return prefix.title()
 
-    # ---- 4️⃣ Last resort: filename ----
-    return _name_from_filename(filename)
-
-
-def _name_from_linkedin(linkedin_url: str) -> Optional[str]:
-    m = re.search(r"/(in|pub)/([^/]+)/?", linkedin_url)
-    if not m:
-        return None
-
-    slug = re.sub(r"\d+", "", m.group(2))
-    parts = [p for p in re.split(r"[-_]", slug) if len(p) > 1]
-
-    if len(parts) < 2:
-        return None
-
-    return " ".join(p.capitalize() for p in parts)
+    # 4️⃣ Filename fallback
+    name = os.path.splitext(filename)[0]
+    name = re.sub(r"\d+", "", name)
+    name = name.replace("_", " ").replace("-", " ")
+    return name.title() if name else "Unknown Candidate"
 
 
-def _name_from_email(email: str) -> Optional[str]:
-    user = email.split("@")[0]
-    user = re.sub(r"\d+", "", user)
-    parts = [p for p in re.split(r"[._-]", user) if len(p) > 1]
-
-    if len(parts) < 2:
-        return None
-
-    return " ".join(p.capitalize() for p in parts)
-
-
-def _clean_name_line(line: str) -> str:
-    parts = line.split()
-    while parts and parts[0].lower() in NAME_STOPWORDS:
-        parts.pop(0)
-    return " ".join(parts).title()
-
-
-def _looks_like_person_name(name: str) -> bool:
-    if not name:
-        return False
-
-    words = name.split()
-    if not (2 <= len(words) <= 6):
-        return False
-
-    if not all(w.replace(".", "").isalpha() for w in words):
-        return False
-
-    lowered = name.lower()
-    if any(x in lowered for x in [" in ", " for ", " with ", " and "]):
-        return False
-
-    return True
-
-
-def _name_from_filename(filename: str) -> Optional[str]:
-    base = os.path.splitext(filename)[0]
-    base = re.sub(r"\d+", "", base)
-    base = base.replace("_", " ").replace("-", " ").strip()
-    return base.title() if len(base.split()) >= 2 else None
-
-
-# =====================================================
-# Stage-1 Master Orchestrator (LOCKED)
-# =====================================================
-
-def parse_resume(
-    file_path: str,
-    original_filename: str
-) -> Dict[str, Any]:
-
-    text = extract_text_from_path(file_path)
+# -----------------------------
+# MASTER PARSER (STAGE 1)
+# -----------------------------
+def parse_resume(file: UploadFile) -> dict:
+    text = extract_text(file)
 
     email = extract_email(text)
-    linkedin = extract_linkedin_url(text)
-    full_name = extract_full_name(text, email, linkedin, original_filename)
+    linkedin = extract_linkedin(text)
+    full_name = extract_full_name(text, email, file.filename)
 
     return {
-        "fullName": full_name or "",
+        "fullName": full_name,
         "email": email or "",
         "linkedin": linkedin or "",
         "rawText": text
