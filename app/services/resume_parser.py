@@ -217,7 +217,7 @@ def _name_from_filename(filename: str) -> Optional[str]:
 # Stage-1 Master Orchestrator (LOCKED)
 # =====================================================
 
-def parse_resume_stage_1(
+def parse_resume(
     file_path: str,
     original_filename: str
 ) -> Dict[str, Any]:
