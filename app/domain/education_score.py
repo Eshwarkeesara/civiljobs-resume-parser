@@ -1,4 +1,4 @@
-def education_score(levels: set[str]) -> int:
+def score_education(levels: set[str]) -> int:
     """
     Scores education based on qualification combinations.
     Authoritative scoring as per Civil Jobs framework.

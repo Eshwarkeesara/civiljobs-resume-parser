@@ -1,63 +1,31 @@
-from fastapi import APIRouter, UploadFile, File
-from app.services.resume_parser import extract_full_name
-from app.services.education_scoring import score_education
-from app.services.text_extraction import extract_text  # or wherever text extraction is
-from app.core.nlp import nlp  # your spaCy loader
+# api/resume.py
+from fastapi import APIRouter, UploadFile, File, HTTPException
+import tempfile
+import os
+
+from app.services.resume_parser import parse_resume
 
 router = APIRouter(prefix="/api/resume", tags=["Resume"])
 
 
 @router.post("/parse")
-async def parse_resume(file: UploadFile = File(...)):
-    # 1️⃣ Extract raw text
-    resume_text = extract_text(file)
+async def parse_resume_endpoint(file: UploadFile = File(...)):
+    """
+    API layer only.
+    Saves file temporarily and delegates logic to resume_parser.
+    """
 
-    # 2️⃣ Extract basic contact info (however you already do it)
-    email = extract_email(resume_text)
-    phone = extract_phone(resume_text)
-    linkedin_url = extract_linkedin(resume_text)
+    if not file.filename.lower().endswith((".pdf", ".docx")):
+        raise HTTPException(status_code=400, detail="Only PDF or DOCX files are supported")
 
-    # 3️⃣ GUARANTEED full name extraction
-    full_name = extract_full_name(
-        text=resume_text,
-        email=email,
-        linkedin_url=linkedin_url,
-        filename=file.filename,
-        nlp=nlp
-    )
+    # Create temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file.filename) as tmp:
+        contents = await file.read()
+        tmp.write(contents)
+        tmp_path = tmp.name
 
-    # 4️⃣ Education detection & scoring
-    education_levels = detect_education_levels(resume_text)
-    education_score = score_education(education_levels)
-
-    education = [
-        {
-            "qualification": list(education_levels),
-            "score": education_score
-        }
-    ] if education_levels else []
-
-    # 5️⃣ Confidence score (simple for now)
-    confidence = 0
-    if full_name: confidence += 20
-    if email: confidence += 20
-    if phone: confidence += 20
-    if education_score > 0: confidence += 20
-
-    confidence = min(confidence, 100)
-
-    # 6️⃣ FINAL RESPONSE (Lovable-compatible)
-    return {
-        "fullName": full_name,
-        "email": email or "",
-        "phone": phone or "",
-        "location": "",
-        "linkedinUrl": linkedin_url or "",
-        "summary": "",
-        "education": education,
-        "experience": [],
-        "skills": [],
-        "totalExperienceYears": None,
-        "confidenceScore": confidence
-    }
-
+    try:
+        parsed = parse_resume(tmp_path)
+        return parsed
+    finally:
+        os.remove(tmp_path)
