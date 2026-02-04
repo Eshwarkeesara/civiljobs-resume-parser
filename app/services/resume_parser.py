@@ -33,11 +33,108 @@ def extract_text(file: UploadFile) -> str:
             doc = docx.Document(tmp_path)
             for para in doc.paragraphs:
                 text += para.text + "\n"
+        else:
+
+            raise ValueError("Unsupported file format (PDF / DOCX only)")
+        
     finally:
         os.unlink(tmp_path)
 
+# -----------------------------
+# CONTACT
+# -----------------------------
+def extract_email(text: str):
+    match = re.search(
+        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+        text
+    )
+    return match.group() if match else None
+
+
+def extract_phone(text: str):
+    match = re.search(r"(?:\+91[-\s]?)?[6-9]\d{9}", text)
+    return match.group() if match else None
+
+    # ------------------------------
+    # Normalize text
+    # ------------------------------
+    
+def normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+
+    text = "\n".join(line.strip() for line in text.split("\n"))
+
     return text.strip()
 
+def extract_linkedin_url(text: str):
+    """
+    Extracts FULL canonical LinkedIn profile URL.
+    Handles line breaks, hyphen wraps, and partial URLs from PDFs.
+    """
+
+    if not text:
+        return None
+
+    # -------------------------------------------------
+    # 1️⃣ Normalize text to repair broken LinkedIn URLs
+    # -------------------------------------------------
+
+    # Join lines broken after hyphens (PDF artifact)
+    repaired_text = re.sub(
+        r"(linkedin\.com/in/[A-Za-z0-9\-]+)-\s*\n\s*([A-Za-z0-9\-]+)",
+        r"\1\2",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Remove line breaks inside linkedin URLs
+    repaired_text = re.sub(
+        r"(linkedin\.com/in/[A-Za-z0-9\-]+)\s*\n\s*([A-Za-z0-9\-]+)",
+        r"\1\2",
+        repaired_text,
+        flags=re.IGNORECASE
+    )
+
+    # -------------------------------------------------
+    # 2️⃣ Extract ALL candidate LinkedIn URLs
+    # -------------------------------------------------
+    urls = re.findall(
+        r"(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9\-]+",
+        repaired_text,
+        flags=re.IGNORECASE
+    )
+
+    if not urls:
+        return None
+
+    # -------------------------------------------------
+    # 3️⃣ Pick the LONGEST one (most complete)
+    # -------------------------------------------------
+    url = max(urls, key=len)
+
+    # -------------------------------------------------
+    # 4️⃣ Canonicalize
+    # -------------------------------------------------
+    url = url.lower()
+
+    if not url.startswith("http"):
+        url = "https://" + url.lstrip("/")
+
+    if not url.startswith("https://www."):
+        url = url.replace("https://linkedin.com", "https://www.linkedin.com")
+
+    # Remove trailing junk (just in case)
+    url = re.sub(r"[^\w\-\/:.\?=#]+$", "", url)
+
+    # Ensure trailing slash
+    if not url.endswith("/"):
+        url += "/"
+
+    return url
 
 # -----------------------------
 # NAME (GUARANTEED)
@@ -64,22 +161,6 @@ def extract_full_name(text: str, email: str | None, filename: str) -> str:
 
 
 # -----------------------------
-# CONTACT
-# -----------------------------
-def extract_email(text: str):
-    match = re.search(
-        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-        text
-    )
-    return match.group() if match else None
-
-
-def extract_phone(text: str):
-    match = re.search(r"(?:\+91[-\s]?)?[6-9]\d{9}", text)
-    return match.group() if match else None
-
-
-# -----------------------------
 # EXPERIENCE
 # -----------------------------
 def extract_total_experience_years(text: str):
@@ -95,6 +176,8 @@ def parse_resume(file: UploadFile) -> dict:
 
     email = extract_email(text)
     phone = extract_phone(text)
+
+    linkedin_url = extract_linkedin_url(text)
 
     full_name = extract_full_name(text, email, file.filename)
 
@@ -125,7 +208,8 @@ def parse_resume(file: UploadFile) -> dict:
                 "qualification": list(education_levels),
                 "score": education_score
             }
-        ] if education_levels else [],
+        ] 
+        if education_levels else [],
         "skills": skills,
         "totalExperienceYears": experience_years,
         "confidenceScore": confidence
