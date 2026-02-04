@@ -207,6 +207,7 @@ def parse_resume(file: UploadFile) -> dict:
         "fullName": full_name,
         "email": email or "",
         "phone": phone or "",
+        "linkedinURL": linkedin_url or "",
         "education": [
             {
                 "qualification": list(education_levels),
