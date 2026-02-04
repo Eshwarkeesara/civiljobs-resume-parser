@@ -3,6 +3,7 @@ import pdfplumber
 import docx
 import tempfile
 import os
+import unicodedata
 from fastapi import UploadFile
 
 from app.domain.education import detect_education_levels
@@ -28,17 +29,34 @@ def extract_text(file: UploadFile) -> str:
                 for page in pdf.pages:
                     if page.extract_text():
                         text += page.extract_text() + "\n"
-
+            return normalize_text(text)        
         elif suffix == ".docx":
             doc = docx.Document(tmp_path)
             for para in doc.paragraphs:
                 text += para.text + "\n"
+            return normalize_text(text)
         else:
 
             raise ValueError("Unsupported file format (PDF / DOCX only)")
         
     finally:
         os.unlink(tmp_path)
+
+    
+    # ------------------------------
+    # Normalize text
+    # ------------------------------
+    
+def normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+
+    text = "\n".join(line.strip() for line in text.split("\n"))
+
+    return text.strip()
 
 # -----------------------------
 # CONTACT
@@ -55,20 +73,6 @@ def extract_phone(text: str):
     match = re.search(r"(?:\+91[-\s]?)?[6-9]\d{9}", text)
     return match.group() if match else None
 
-    # ------------------------------
-    # Normalize text
-    # ------------------------------
-    
-def normalize_text(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text)
-
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{2,}", "\n", text)
-
-    text = "\n".join(line.strip() for line in text.split("\n"))
-
-    return text.strip()
 
 def extract_linkedin_url(text: str):
     """
