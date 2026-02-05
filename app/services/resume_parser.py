@@ -224,8 +224,8 @@ def extract_full_name(
         if not is_human_name_line(line):
             continue
 
-        # Require at least TWO token matches
-        if sum(t in low for t in tokens) >= 2:
+        # Require at least ONE token matches
+        if sum(t in low for t in tokens) >= 1:
             return clean_name_line(line).title()
 
     return None
