@@ -140,28 +140,95 @@ def extract_linkedin_url(text: str):
 
     return url
 
+# -------------------------------------------------
+# NAME TOKEN EXTRACTION (ANCHORS)
+# -------------------------------------------------
+def get_name_tokens(email=None, linkedin_url=None):
+    """
+    Extracts identity tokens ONLY from email / LinkedIn
+    """
+    tokens = set()
+
+    if linkedin_url:
+        m = re.search(r"linkedin\.com\/in\/([^/?]+)", linkedin_url.lower())
+        if m:
+            slug = re.sub(r"\d+", "", m.group(1))
+            parts = re.split(r"[-_]", slug)
+            tokens.update(p for p in parts if len(p) > 1)
+
+    if email:
+        username = email.split("@")[0].lower()
+        parts = re.split(r"[._-]", username)
+        tokens.update(p for p in parts if len(p) > 1 and not p.isdigit())
+
+    return tokens
+
+
+def is_human_name_line(line: str) -> bool:
+    words = line.split()
+    return (
+        2 <= len(words) <= 6
+        and all(w.replace(".", "").isalpha() for w in words)
+        and not line.isupper()
+    )
+
+def clean_name_line(line: str) -> str:
+    """
+    Removes leading labels accidentally merged into name line
+    e.g. 'Contact G M T Sai Kumar' → 'G M T Sai Kumar'
+    """
+    LABELS = [
+        "contact",
+        "profile",
+        "resume",
+        "name"
+    ]
+
+    parts = line.split()
+    while parts and parts[0].lower() in LABELS:
+        parts.pop(0)
+
+    return " ".join(parts)
+
 # -----------------------------
 # NAME (GUARANTEED)
 # -----------------------------
-def extract_full_name(text: str, email: str | None, filename: str) -> str:
+def extract_full_name(
+    text: str,
+    email: str | None,
+    linkedin_url: str | None
+) -> str | None:
+    """
+    RULE:
+    - NEVER guess names from prose
+    - ONLY accept names anchored by LinkedIn / Email tokens
+    """
+
+    tokens = get_name_tokens(email=email, linkedin_url=linkedin_url)
+
+    if not tokens:
+        return None
+
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-    for line in lines[:10]:
-        if (
-            2 <= len(line.split()) <= 6
-            and line.replace(" ", "").isalpha()
-            and not line.isupper()
-            and not any(x in line.lower() for x in ["resume", "profile", "engineer"])
-        ):
-            return line.title()
+    # Only scan header zone
+    candidate_zone = []
+    for line in lines:
+        if line.lower().startswith("experience"):
+            break
+        candidate_zone.append(line)
 
-    if email:
-        prefix = email.split("@")[0].replace(".", " ").replace("_", " ")
-        if len(prefix.split()) >= 2:
-            return prefix.title()
+    for line in candidate_zone:
+        low = line.lower()
 
-    name = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ")
-    return name.title() if name else "Unknown Candidate"
+        if not is_human_name_line(line):
+            continue
+
+        # Require at least TWO token matches
+        if sum(t in low for t in tokens) >= 2:
+            return clean_name_line(line).title()
+
+    return None
 
 
 # -----------------------------
@@ -183,7 +250,7 @@ def parse_resume(file: UploadFile) -> dict:
 
     linkedin_url = extract_linkedin_url(text)
 
-    full_name = extract_full_name(text, email, file.filename)
+    full_name = extract_full_name(text, email, linkedin_url)
 
     education_levels = detect_education_levels(text)
     education_score = score_education(education_levels)
